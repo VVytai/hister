@@ -192,14 +192,22 @@ func importRemoteFile(
 
 	d, err := prepareRemoteFile(input, content, info, source, maxFileSize, labelOverride)
 	if err != nil {
-		log.Warn().Err(err).Str("file", input.Path).Msg("Failed to extract file content")
+		log.Warn().Err(fileSnapshotImportError(input.Path, err)).Str("file", input.Path).Msg("Failed to extract file content")
 		return 0, 0, 1
 	}
 	if err := c.AddDocumentJSON(d); err != nil {
-		log.Warn().Err(err).Str("file", input.Path).Str("url", remoteURL).Msg("Failed to import file snapshot")
+		log.Warn().Err(fileSnapshotImportError(input.Path, err)).Str("file", input.Path).Str("url", remoteURL).Msg("Failed to import file snapshot")
 		return 0, 0, 1
 	}
 	return 1, 0, 0
+}
+
+func fileSnapshotImportError(path string, err error) error {
+	if filepath.Ext(path) != "" {
+		return err
+	}
+	return fmt.Errorf("%w. This file has no extension, so Hister treated it as a file snapshot. "+
+		"If this is a Hister JSON export, rename it to %q and retry the import", err, filepath.Base(path)+".json")
 }
 
 func prepareRemoteFile(input importFileInput, content []byte, info os.FileInfo, source string, maxFileSize int64, labelOverride documentLabelOverride) (*document.Document, error) {
@@ -207,7 +215,8 @@ func prepareRemoteFile(input importFileInput, content []byte, info os.FileInfo, 
 		return nil, indexer.ErrEmptyFile
 	}
 	if maxFileSize > 0 && (info.Size() > maxFileSize || int64(len(content)) > maxFileSize) {
-		return nil, indexer.ErrFileTooLarge
+		return nil, fmt.Errorf("%w: file is %d bytes, limit from indexer.max_file_size_mb is %d bytes",
+			indexer.ErrFileTooLarge, max(info.Size(), int64(len(content))), maxFileSize)
 	}
 	remoteURL, err := remoteFileURL(source, input.Path)
 	if err != nil {
