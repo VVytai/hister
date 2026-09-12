@@ -24,6 +24,35 @@ type importFileInput struct {
 	Label string
 }
 
+type fileImportOptions struct {
+	Source       string
+	MaxFileSize  int64
+	SkipExisting bool
+	StartDate    int64
+	EndDate      int64
+	BatchSize    int
+	Label        documentLabelOverride
+}
+
+func importFile(c *client.Client, input importFileInput, opts fileImportOptions) (imported, skipped, errCount int) {
+	switch strings.ToLower(filepath.Ext(input.Path)) {
+	case ".7z":
+		return importJSONFile(c, input.Path, opts.SkipExisting, opts.StartDate, opts.EndDate, opts.BatchSize, opts.Label)
+	case ".json":
+		isExport, err := isHisterJSONExport(input.Path)
+		if err != nil {
+			log.Warn().Err(err).Str("file", input.Path).Msg("Failed to inspect JSON file")
+			return 0, 0, 1
+		}
+		if isExport {
+			return importJSONFile(c, input.Path, opts.SkipExisting, opts.StartDate, opts.EndDate, opts.BatchSize, opts.Label)
+		}
+	case ".html", ".htm":
+		return importHTMLFile(c, input, opts.Source, opts.MaxFileSize, opts.SkipExisting, opts.Label)
+	}
+	return importRemoteFilePath(c, input, opts.Source, opts.MaxFileSize, opts.SkipExisting, opts.Label)
+}
+
 func defaultRemoteFileSource() string {
 	hostname, err := os.Hostname()
 	if err != nil || strings.TrimSpace(hostname) == "" {

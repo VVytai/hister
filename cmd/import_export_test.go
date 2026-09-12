@@ -203,6 +203,9 @@ func TestIsHisterJSONExport(t *testing.T) {
 		{name: "ordinary object", content: "{\"name\":\"settings\"}", want: false},
 		{name: "ordinary array", content: "[1,2,3]", want: false},
 		{name: "ordinary URL array", content: "[{\"url\":\"https://example.com\"}]", want: false},
+		{name: "plain text", content: "Notes for tomorrow", want: false},
+		{name: "markdown link", content: "[Hister](https://hister.org)", want: false},
+		{name: "binary", content: "\xff\x00", want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

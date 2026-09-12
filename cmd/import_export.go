@@ -35,13 +35,16 @@ var exportCmd = &cobra.Command{
 Each document is written as a single JSON line. Lines not starting with '{' are
 structural markers ('[', ']', ',') and can be safely skipped by parsers.
 
+If OUTPUT_FILE has no extension, .json is appended automatically. Explicit
+extensions are preserved; use .json so the file importer recognizes the export.
+
 Use --start-date and --end-date (format: YYYY-MM-DD) to only export
 documents updated within the given date range.
 
 Use '-' as OUTPUT_FILE to write to stdout.`,
 	Args: cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		outputFile := args[0]
+		outputFile := exportOutputPath(args[0])
 		queryStr := strings.Join(args[1:], " ")
 		if queryStr == "" {
 			queryStr = "*"
@@ -56,6 +59,9 @@ Use '-' as OUTPUT_FILE to write to stdout.`,
 		if outputFile == "-" {
 			out = os.Stdout
 		} else {
+			if !strings.EqualFold(filepath.Ext(outputFile), ".json") {
+				log.Warn().Str("file", outputFile).Msg("Export format is JSON. Use a .json extension so hister import file recognizes this export")
+			}
 			f, err := os.Create(outputFile)
 			if err != nil {
 				exit(1, "Failed to create output file: "+err.Error())
@@ -130,6 +136,13 @@ Use '-' as OUTPUT_FILE to write to stdout.`,
 				cliSuccessStyle.Render("✓"), count, cliInfoStyle.Render(outputFile))
 		}
 	},
+}
+
+func exportOutputPath(path string) string {
+	if path == "" || path == "-" || os.IsPathSeparator(path[len(path)-1]) || filepath.Ext(path) != "" {
+		return path
+	}
+	return path + ".json"
 }
 
 var importCmd = &cobra.Command{
@@ -247,25 +260,10 @@ documents whose "added" timestamp falls within the given date range.`,
 			return err
 		}
 		for _, input := range inputFiles {
-			var i, s, e int
-			switch ext := strings.ToLower(filepath.Ext(input.Path)); ext {
-			case ".7z":
-				i, s, e = importJSONFile(c, input.Path, skip, dateRange.From, dateRange.To, batchSize, labelOverride)
-			case ".json":
-				isExport, detectErr := isHisterJSONExport(input.Path)
-				if detectErr != nil {
-					log.Warn().Err(detectErr).Str("file", input.Path).Msg("Failed to inspect JSON file")
-					e = 1
-				} else if isExport {
-					i, s, e = importJSONFile(c, input.Path, skip, dateRange.From, dateRange.To, batchSize, labelOverride)
-				} else {
-					i, s, e = importRemoteFilePath(c, input, normalizedSource, maxFileSize, skip, labelOverride)
-				}
-			case ".html", ".htm":
-				i, s, e = importHTMLFile(c, input, normalizedSource, maxFileSize, skip, labelOverride)
-			default:
-				i, s, e = importRemoteFilePath(c, input, normalizedSource, maxFileSize, skip, labelOverride)
-			}
+			i, s, e := importFile(c, input, fileImportOptions{
+				Source: normalizedSource, MaxFileSize: maxFileSize, SkipExisting: skip,
+				StartDate: dateRange.From, EndDate: dateRange.To, BatchSize: batchSize, Label: labelOverride,
+			})
 			imported += i
 			skipped += s
 			errCount += e
