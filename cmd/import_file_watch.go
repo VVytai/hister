@@ -20,7 +20,6 @@ import (
 	"github.com/asciimoo/hister/config"
 	"github.com/asciimoo/hister/files"
 	"github.com/asciimoo/hister/server/document"
-	"github.com/asciimoo/hister/server/indexer"
 )
 
 type fileWatchOptions struct {
@@ -176,7 +175,7 @@ func importWatchedFile(ctx context.Context, c *client.Client, input importFileIn
 		return true, nil
 	}
 	if info.Size() > opts.MaxFileSize {
-		return false, indexer.ErrFileTooLarge
+		return false, fileSnapshotSizeError(info.Size(), opts.MaxFileSize)
 	}
 	f, err := os.Open(input.Path)
 	if err != nil {
@@ -188,7 +187,7 @@ func importWatchedFile(ctx context.Context, c *client.Client, input importFileIn
 		return false, err
 	}
 	if int64(len(content)) > opts.MaxFileSize {
-		return false, indexer.ErrFileTooLarge
+		return false, fileSnapshotSizeError(max(info.Size(), int64(len(content))), opts.MaxFileSize)
 	}
 	if ext == ".json" && isHisterJSONExportReader(bytes.NewReader(content)) {
 		log.Warn().Str("file", input.Path).Msg("Watch mode skips Hister exports")

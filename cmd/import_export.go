@@ -157,8 +157,11 @@ var importFileCmd = &cobra.Command{
 
 JSON files are read line by line; each line starting with '{' is parsed as a
 document and submitted to the running server without reprocessing its stored
-content. JSON files that do not have the Hister export array shape are imported
-as file snapshots.
+content. Array brackets and separating commas must be on their own lines.
+Compact or indented export layouts are not supported. Each line must be smaller
+than 64 MiB; indexer.max_file_size_mb does not change this export limit.
+JSON files that do not have the Hister export array shape are imported as file
+snapshots.
 
 A Hister JSON export may be read directly or from a 7z compressed archive
 (.7z) containing a single JSON file.
@@ -408,6 +411,7 @@ func importJSONFile(
 	labelOverride documentLabelOverride,
 ) (imported, skipped, errCount int) {
 	var reader io.Reader
+	inputLog := log.With().Str("file", inputFile).Logger()
 
 	if strings.HasSuffix(strings.ToLower(inputFile), ".7z") {
 		sz, err := sevenzip.OpenReader(inputFile)
@@ -432,6 +436,7 @@ func importJSONFile(
 			log.Warn().Str("file", inputFile).Msg("No JSON file found inside 7z archive, skipping")
 			return 0, 0, 1
 		}
+		inputLog = inputLog.With().Str("entry", jsonEntry.Name).Logger()
 		rc, err := jsonEntry.Open()
 		if err != nil {
 			log.Warn().Err(err).Str("file", inputFile).Msg("Failed to open JSON entry in 7z archive, skipping")
@@ -457,9 +462,7 @@ func importJSONFile(
 		reader = f
 	}
 
-	const maxLineSize = 64 * 1024 * 1024 // 64 MB covers large HTML+favicon lines
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), maxLineSize)
+	exportReader := newJSONExportReader(reader, maxJSONExportLineSize)
 	docs := make([]*document.Document, 0, batchSize)
 	flush := func() {
 		if len(docs) == 0 {
@@ -471,14 +474,19 @@ func importJSONFile(
 		docs = docs[:0]
 	}
 
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 || line[0] != '{' {
-			continue
+	for {
+		line, err := exportReader.nextLine()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			inputLog.Warn().Err(err).Int("line", exportReader.line).Msg("Failed to read JSON export, stopping this file")
+			errCount++
+			break
 		}
 		var d document.Document
 		if err := json.Unmarshal(line, &d); err != nil {
-			log.Warn().Err(err).Msg("Failed to parse document line, skipping")
+			inputLog.Warn().Err(err).Int("line", exportReader.line).Msg("Failed to parse document line, skipping; each document must be complete on one line")
 			errCount++
 			continue
 		}
@@ -508,11 +516,6 @@ func importJSONFile(
 		}
 	}
 	flush()
-
-	if err := scanner.Err(); err != nil {
-		log.Warn().Err(err).Str("file", inputFile).Msg("Failed to read input file")
-		errCount++
-	}
 
 	return imported, skipped, errCount
 }

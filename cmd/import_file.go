@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/url"
@@ -203,11 +204,34 @@ func importRemoteFile(
 }
 
 func fileSnapshotImportError(path string, err error) error {
-	if filepath.Ext(path) != "" {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == ".json" || errors.Is(err, indexer.ErrBinaryFile) {
 		return err
 	}
-	return fmt.Errorf("%w. This file has no extension, so Hister treated it as a file snapshot. "+
-		"If this is a Hister JSON export, rename it to %q and retry the import", err, filepath.Base(path)+".json")
+	reason := "This file has no extension"
+	if ext != "" {
+		reason = fmt.Sprintf("This file has a %q extension", ext)
+	}
+	return fmt.Errorf("%w. %s, so Hister treated it as a file snapshot. "+
+		"If this is a Hister JSON export, rename it to %q and retry the import",
+		err, reason, strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))+".json")
+}
+
+func fileSnapshotSizeError(size, limit int64) error {
+	return fmt.Errorf("%w: file is %d bytes, limit from indexer.max_file_size_mb is %d bytes",
+		indexer.ErrFileTooLarge, size, limit)
+}
+
+func fileContentImportError(path string, err error) error {
+	if !errors.Is(err, indexer.ErrBinaryFile) {
+		return err
+	}
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".zip", ".gz", ".bz2", ".xz", ".zst", ".tgz", ".tar", ".rar":
+		return fmt.Errorf("%w: this archive format cannot be imported directly. Extract the archive and import the extracted files", err)
+	default:
+		return fmt.Errorf("%w: plain text extraction requires valid UTF 8. If this is a text file, convert it to UTF 8 and retry; otherwise use a supported file format", err)
+	}
 }
 
 func prepareRemoteFile(input importFileInput, content []byte, info os.FileInfo, source string, maxFileSize int64, labelOverride documentLabelOverride) (*document.Document, error) {
@@ -215,8 +239,7 @@ func prepareRemoteFile(input importFileInput, content []byte, info os.FileInfo, 
 		return nil, indexer.ErrEmptyFile
 	}
 	if maxFileSize > 0 && (info.Size() > maxFileSize || int64(len(content)) > maxFileSize) {
-		return nil, fmt.Errorf("%w: file is %d bytes, limit from indexer.max_file_size_mb is %d bytes",
-			indexer.ErrFileTooLarge, max(info.Size(), int64(len(content))), maxFileSize)
+		return nil, fileSnapshotSizeError(max(info.Size(), int64(len(content))), maxFileSize)
 	}
 	remoteURL, err := remoteFileURL(source, input.Path)
 	if err != nil {
@@ -233,7 +256,7 @@ func prepareRemoteFile(input importFileInput, content []byte, info os.FileInfo, 
 		Label:   labelOverride.resolve("", fallbackLabel),
 	}
 	if err := indexer.PrepareFileContent(input.Path, d, content); err != nil {
-		return nil, err
+		return nil, fileContentImportError(input.Path, err)
 	}
 	if d.Text == "" && d.HTML == "" {
 		return nil, fmt.Errorf("file contains no indexable content")
