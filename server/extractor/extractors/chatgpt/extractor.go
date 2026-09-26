@@ -21,7 +21,8 @@ import (
 
 const conversationType = "chatgpt"
 
-const conversationRoleSelector = `[data-message-author-role], [data-testid^="conversation-turn-"][data-turn]`
+const conversationRoleSelector = `[data-message-author-role], [data-testid^="conversation-turn-"][data-turn], ` +
+	`[data-chatgpt-search-unit-key], [data-content-search-unit-key]`
 
 const noConversationTurns = "no visible user or assistant turns found; capture the loaded conversation with the browser extension or a browser crawler (chromedp or bidi); private conversations require a signed in browser"
 
@@ -187,7 +188,7 @@ func findConversationTurns(doc *goquery.Document) []conversationTurn {
 		return nil
 	}
 	turns := make([]conversationTurn, 0)
-	// Visit both marker forms together so mixed markup retains document order.
+	// Visit all marker forms together so mixed markup retains document order.
 	doc.Find(conversationRoleSelector).Each(func(_ int, roleNode *goquery.Selection) {
 		role := conversationRole(roleNode)
 		if role == "" || hasRoleAncestor(roleNode) || isHiddenElement(roleNode) {
@@ -213,7 +214,20 @@ func conversationRole(selection *goquery.Selection) string {
 	if rawRole, ok := selection.Attr("data-message-author-role"); ok {
 		return normalizeRole(rawRole)
 	}
-	return normalizeRole(selection.AttrOr("data-turn", ""))
+	if rawRole, ok := selection.Attr("data-turn"); ok {
+		return normalizeRole(rawRole)
+	}
+	// Search units encode the role as the final component, for example
+	// "fallback-turn-0:2:assistant". Both attributes may wrap the same message.
+	for _, attribute := range []string{"data-chatgpt-search-unit-key", "data-content-search-unit-key"} {
+		if key, ok := selection.Attr(attribute); ok {
+			if separator := strings.LastIndexByte(key, ':'); separator > 0 {
+				return normalizeRole(key[separator+1:])
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 func normalizeRole(raw string) string {
@@ -252,6 +266,7 @@ func cleanConversationContent(content *goquery.Selection, role string) {
 		// Turn wrappers include an accessibility heading repeating the speaker.
 		content.ChildrenFiltered(".sr-only").Remove()
 	}
+	content.Find(`[data-markdown-copy="exclude"], .turn-action-controls`).Remove()
 	content.Find(`script, style, noscript, template, button, svg, img, picture, video, audio, iframe, embed, object, canvas, source, form, input, textarea, select, option`).Remove()
 	content.Find(`[hidden], [aria-hidden]`).Each(func(_ int, nested *goquery.Selection) {
 		if isHiddenElement(nested) {
